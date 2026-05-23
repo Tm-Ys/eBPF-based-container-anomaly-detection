@@ -1,0 +1,19 @@
+# Build artifacts
+build/
+*.o
+*.skel.h
+
+# Python virtual environment
+.venv/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# IDE
+.vscode/
+.idea/
+
+# Temp
+/tmp/
