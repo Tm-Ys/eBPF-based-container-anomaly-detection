@@ -76,6 +76,7 @@ int handle_sys_enter(struct trace_event_raw_sys_enter *ctx)
     e->cgroup_id = bpf_get_current_cgroup_id();
     e->syscall_id = ctx->id;
     e->ret = 0;
+    e->type = EVENT_SYSCALL;
     bpf_get_current_comm(e->comm, sizeof(e->comm));
 
     bpf_ringbuf_submit(e, 0);
@@ -99,6 +100,70 @@ int handle_sys_exit(struct trace_event_raw_sys_exit *ctx)
     e->cgroup_id = bpf_get_current_cgroup_id();
     e->syscall_id = ctx->id;
     e->ret = ctx->ret;
+    e->type = EVENT_SYSCALL;
+    bpf_get_current_comm(e->comm, sizeof(e->comm));
+
+    bpf_ringbuf_submit(e, 0);
+    return 0;
+}
+
+SEC("tp/sched/sched_process_exec")
+int handle_sched_process_exec(struct trace_event_raw_sched_process_exec *ctx)
+{
+    struct event *e;
+
+    e = bpf_ringbuf_reserve(&ringbuf, sizeof(*e), 0);
+    if (!e)
+        return 0;
+
+    e->timestamp_ns = bpf_ktime_get_ns();
+    e->pid = bpf_get_current_pid_tgid() >> 32;
+    e->cgroup_id = bpf_get_current_cgroup_id();
+    e->syscall_id = 0;
+    e->ret = 0;
+    e->type = EVENT_PROCESS;
+    bpf_get_current_comm(e->comm, sizeof(e->comm));
+
+    bpf_ringbuf_submit(e, 0);
+    return 0;
+}
+
+SEC("tp/sched/sched_process_fork")
+int handle_sched_process_fork(struct trace_event_raw_sched_process_fork *ctx)
+{
+    struct event *e;
+
+    e = bpf_ringbuf_reserve(&ringbuf, sizeof(*e), 0);
+    if (!e)
+        return 0;
+
+    e->timestamp_ns = bpf_ktime_get_ns();
+    e->pid = bpf_get_current_pid_tgid() >> 32;
+    e->cgroup_id = bpf_get_current_cgroup_id();
+    e->syscall_id = 1;
+    e->ret = ctx->child_pid;
+    e->type = EVENT_PROCESS;
+    bpf_get_current_comm(e->comm, sizeof(e->comm));
+
+    bpf_ringbuf_submit(e, 0);
+    return 0;
+}
+
+SEC("tp/sched/sched_process_exit")
+int handle_sched_process_exit(struct trace_event_raw_sched_process_exit *ctx)
+{
+    struct event *e;
+
+    e = bpf_ringbuf_reserve(&ringbuf, sizeof(*e), 0);
+    if (!e)
+        return 0;
+
+    e->timestamp_ns = bpf_ktime_get_ns();
+    e->pid = bpf_get_current_pid_tgid() >> 32;
+    e->cgroup_id = bpf_get_current_cgroup_id();
+    e->syscall_id = 2;
+    e->ret = 0;
+    e->type = EVENT_PROCESS;
     bpf_get_current_comm(e->comm, sizeof(e->comm));
 
     bpf_ringbuf_submit(e, 0);

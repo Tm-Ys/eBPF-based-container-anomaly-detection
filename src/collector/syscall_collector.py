@@ -3,17 +3,21 @@ import subprocess
 import sys
 from pathlib import Path
 
-from src.collector.base import BaseCollector
+from src.collector.base import BaseCollector, register_collector
 
-EVENT_FORMAT = struct.Struct("Q 2I 2i 16s")
+EVENT_FORMAT = struct.Struct("Q 2I 2i B 16s")
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
+EVENT_TYPE_SYSCALL = 0
 
+
+@register_collector
 class SyscallCollector(BaseCollector):
     name = "syscall"
 
     def __init__(self):
         self._proc: subprocess.Popen | None = None
+        self._loader_args: list[str] = []
 
     def start(self):
         loader_path = BASE_DIR / "build" / "loader"
@@ -22,8 +26,9 @@ class SyscallCollector(BaseCollector):
                 f"Loader not found at {loader_path}. Run 'make' first."
             )
 
+        cmd = [str(loader_path)] + self._loader_args
         self._proc = subprocess.Popen(
-            [str(loader_path)],
+            cmd,
             stdout=subprocess.PIPE,
             stderr=sys.stderr,
         )
@@ -43,7 +48,11 @@ class SyscallCollector(BaseCollector):
             if not data:
                 break
 
-            ts, pid, cgroup_id, syscall_id, ret_s32, comm = EVENT_FORMAT.unpack(data)
+            ts, pid, cgroup_id, syscall_id, ret_s32, ev_type, comm = \
+                EVENT_FORMAT.unpack(data)
+            if ev_type != EVENT_TYPE_SYSCALL:
+                continue
+
             yield {
                 "timestamp_ns": ts,
                 "pid": pid,

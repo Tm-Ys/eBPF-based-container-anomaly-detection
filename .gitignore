@@ -1,5 +1,9 @@
 # Build artifacts
 build/
+
+# Data & model (regenerated each run)
+data/
+model.joblib
 *.o
 *.skel.h
 

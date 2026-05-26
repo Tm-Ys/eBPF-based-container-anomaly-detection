@@ -9,8 +9,12 @@
 ## 架构（数据流）
 
 ```
-raw_tp/sys_enter + raw_tp/sys_exit (内核) → BPF ring buffer → C 加载器 (libbpf skeleton)
-    → stdout (二进制结构体) → Python subprocess → struct.unpack → 终端输出
+raw_tp/sys_enter + raw_tp/sys_exit + sched_process_* (内核) → BPF ring buffer
+    → C 加载器 (libbpf skeleton) → stdout (二进制结构体)
+    → Python subprocess → struct.unpack
+        ├── feed() → SyscallCollector / ProcessCollector / NetworkCollector
+        └── broadcast() → Unix socket (/tmp/ebpf_events.sock)
+                            └── 外部进程订阅（UnixSocketCollector）
 ```
 
 ## BPF Maps
@@ -25,8 +29,19 @@ raw_tp/sys_enter + raw_tp/sys_exit (内核) → BPF ring buffer → C 加载器 
 ## 当前进度
 
 - ✅ **Phase 1 已完成**（系统调用监控流水线，含所有 Issue 修复）
-- ❌ Phase 2（完整采集器）— 未开始
-- ❌ Phase 3（ML 检测）— 未开始
+- ✅ **Phase 2 已完成**（进程/网络/资源采集器 + 插件注册 + Unix Socket IPC + 测试）
+- ✅ **Phase 3 已完成**（ML 检测流水线）
+  - ✅ `src/detector/recorder.py` — DataRecorder 采集器，注册为插件，写入 3 个 CSV：
+    - `raw_*.csv`：原始事件（事件级记录）
+    - `windows_*.csv`：1 秒窗口聚合（按 cgroup_id 分桶，17 个 syscall 分类 + process 事件计数，在 feed() 中同步刷出）
+    - `resources_*.csv`：cgroup CPU/memory 资源（每 2 秒轮询）
+  - ✅ `src/detector/features.py` — 特征提取：20 维特征向量 + RobustScaler + 滚动窗口统计
+  - ✅ `src/detector/model.py` — AnomalyDetector（IsolationForest/PCA 双模式，train/predict/anomaly_score/save/load）
+  - ✅ `src/detector/train.py` — 训练脚本：自动运行 sim_normal.sh 收集数据 → 训练模型 → 保存 model.joblib
+  - ✅ `src/detector/detect.py` — RealTimeDetector：加载 model.joblib，对新窗口评分，输出 ALARM/OK
+  - ✅ `scripts/sim_normal.sh` — 正常行为模拟（文件 I/O、网络、进程创建、内存）
+  - ✅ `scripts/sim_anomaly.sh` — 异常行为模拟（fork 炸弹、文件写入风暴、端口扫描、CPU 峰值）
+  - ✅ `scripts/collect_container_data.sh` — Docker 容器数据采集脚本（启动 4 个容器跑 workload → eBPF 监控 → 存 CSV → 清理）
 - ❌ Phase 4（测试）— 未开始
 
 ## 目录结构
@@ -34,16 +49,24 @@ raw_tp/sys_enter + raw_tp/sys_exit (内核) → BPF ring buffer → C 加载器 
 ```
 .
 ├── bpf/                  # eBPF C 程序
-│   ├── syscall.bpf.c    # Phase 1: raw_tp/sys_enter 钩子
+│   ├── syscall.bpf.c    # Phase 1+2: raw_tp 钩子 + sched tracepoints
 │   └── common.h         # packed 事件结构体
 ├── src/
 │   ├── loader/loader.c  # C 代理：libbpf skeleton + stdout
 │   ├── collector/
-│   │   ├── base.py      # 采集器抽象接口
-│   │   └── syscall_collector.py  # subprocess + struct.unpack
-│   └── main.py          # 入口
+│   │   ├── base.py      # 采集器抽象接口 + 插件注册
+│   │   ├── syscall_collector.py  # subprocess + struct.unpack
+│   │   ├── process_collector.py  # Phase 2: 进程事件
+│   │   ├── network_collector.py  # Phase 2: 网络 syscall 过滤
+│   │   └── resource_collector.py # Phase 2: cgroup 资源读取
+│   ├── detector/        # Phase 3: ML 检测
+│   │   └── recorder.py  # DataRecorder 采集器，CSV 记录
+│   └── main.py          # 入口 + 事件分发
 ├── build/               # 构建产物（已 gitignore）
 ├── Makefile             # 构建系统
+├── scripts/             # 模拟脚本
+│   ├── sim_normal.sh    # 正常行为模拟
+│   └── sim_anomaly.sh   # 异常行为模拟
 └── setup.sh             # 一键环境搭建
 ```
 
@@ -57,17 +80,18 @@ struct event {
     __u32 cgroup_id;       // bpf_get_current_cgroup_id()
     __s32 syscall_id;      // ctx->id 来自 raw_tp/sys_enter
     __s32 ret;             // 返回值（sys_exit），enter 时为 0
+    __u8 type;             // 事件类型：0=syscall, 1=process
     char comm[16];         // bpf_get_current_comm() — 进程名
 };
 ```
-- **总大小：40 字节** — 必须与 Python `struct.Struct('Q2I2i16s')` 匹配
+- **总大小：41 字节** — 必须与 Python `struct.Struct('Q2I2iB16s')` 匹配
 - **Packed** 因为 BPF 目标与 x86_64 对 struct 对齐规则可能不一致
 
 ### Python 结构体解包
 ```python
-EVENT_FORMAT = struct.Struct("Q2I2i16s")
-# Q=u64, I=u32, I=u32, i=s32, i=s32, 16s=char[16]
-# 大小：8+4+4+4+4+16 = 40 字节
+EVENT_FORMAT = struct.Struct("Q2I2iB16s")
+# Q=u64, I=u32, I=u32, i=s32, i=s32, B=u8, 16s=char[16]
+# 大小：8+4+4+4+4+1+16 = 41 字节
 ```
 
 ## 构建系统
@@ -88,6 +112,14 @@ make clean && make all    # 完整重建
 # 需要 sudo 权限
 echo 密码 | sudo -S .venv/bin/python3 -m src.main
 ```
+
+## Python 虚拟环境
+
+```bash
+source .venv/bin/activate
+```
+
+如需使用 Python 做分析或绘图，务必先激活 `.venv` 虚拟环境（已安装 scikit-learn、numpy、pandas、matplotlib、psutil）。所有 Python 相关操作（脚本运行、Jupyter、测试等）均应在虚拟环境内执行。
 
 ## 已知问题 / 注意事项
 
