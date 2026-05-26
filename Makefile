@@ -1,4 +1,4 @@
-BPFTOOL := /usr/lib/linux-tools/$(shell uname -r)/bpftool
+BPFTOOL := $(shell command -v bpftool 2>/dev/null || echo /usr/lib/linux-tools/$(shell uname -r)/bpftool)
 CLANG   := clang
 CC      := gcc
 

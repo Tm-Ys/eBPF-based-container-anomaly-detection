@@ -6,6 +6,7 @@ struct event {
     __u32 pid;
     __u32 cgroup_id;
     __s32 syscall_id;
+    __s32 ret;
     char comm[16];
 } __attribute__((packed));
 

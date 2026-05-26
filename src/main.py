@@ -1,23 +1,29 @@
+import re
 import sys
 
 from src.collector.syscall_collector import SyscallCollector
 
-SYSCALL_NAMES = {
-    0: "read", 1: "write", 2: "open", 3: "close", 4: "stat",
-    9: "mmap", 10: "mprotect", 11: "munmap",
-    12: "brk", 14: "rt_sigprocmask",
-    39: "getpid", 56: "clone", 57: "fork", 59: "execve",
-    62: "kill", 63: "uname", 78: "getdents",
-    101: "ptrace", 102: "getuid", 110: "getppid",
-    137: "statfs", 138: "fstatfs",
-    257: "openat", 262: "newfstatat",
-    290: "process_vm_readv", 291: "process_vm_writev",
-    318: "getrandom",
-    332: "statx",
-    42: "connect", 43: "accept", 44: "sendto", 45: "recvfrom",
-    49: "bind", 50: "listen",
-    165: "mount", 166: "umount2",
-}
+
+def _build_syscall_table():
+    table = {}
+    paths = [
+        "/usr/include/x86_64-linux-gnu/asm/unistd_64.h",
+        "/usr/include/asm/unistd_64.h",
+        "/usr/include/linux/syscall.h",
+    ]
+    for path in paths:
+        try:
+            with open(path) as f:
+                for line in f:
+                    m = re.match(r"#define\s+__NR_(\w+)\s+(\d+)", line)
+                    if m:
+                        table[int(m.group(2))] = m.group(1)
+        except FileNotFoundError:
+            continue
+    return table
+
+
+SYSCALL_NAMES = _build_syscall_table()
 
 
 def syscall_name(nr: int) -> str:
@@ -34,10 +40,11 @@ def main():
         for event in collector.events():
             name = syscall_name(event["syscall_id"])
             print(
-                f"[SYSCALL] pid={event['pid']} "
+                f"[{event['type']}] pid={event['pid']} "
                 f"comm={event['comm']} "
                 f"syscall={name} "
-                f"cgroup={event['cgroup_id']}"
+                f"cgroup={event['cgroup_id']} "
+                f"ret={event['ret']}"
             )
 
     except FileNotFoundError as e:

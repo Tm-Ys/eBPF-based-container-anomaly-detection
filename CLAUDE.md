@@ -9,13 +9,22 @@
 ## 架构（数据流）
 
 ```
-raw_tp/sys_enter (内核) → BPF ring buffer → C 加载器 (libbpf skeleton)
+raw_tp/sys_enter + raw_tp/sys_exit (内核) → BPF ring buffer → C 加载器 (libbpf skeleton)
     → stdout (二进制结构体) → Python subprocess → struct.unpack → 终端输出
 ```
 
+## BPF Maps
+
+| Map | 类型 | 用途 |
+|-----|------|------|
+| `ringbuf` | `BPF_MAP_TYPE_RINGBUF` | 256KB 事件环形缓冲区 |
+| `filter_pid` | `BPF_MAP_TYPE_ARRAY` | 过滤目标 PID（0=不过滤） |
+| `sample_rate` | `BPF_MAP_TYPE_ARRAY` | 采样率分母（1=全部采样） |
+| `sample_counter` | `BPF_MAP_TYPE_PERCPU_ARRAY` | 每 CPU 采样计数器 |
+
 ## 当前进度
 
-- ✅ **Phase 1 已完成**（系统调用监控流水线）
+- ✅ **Phase 1 已完成**（系统调用监控流水线，含所有 Issue 修复）
 - ❌ Phase 2（完整采集器）— 未开始
 - ❌ Phase 3（ML 检测）— 未开始
 - ❌ Phase 4（测试）— 未开始
@@ -47,17 +56,18 @@ struct event {
     __u32 pid;
     __u32 cgroup_id;       // bpf_get_current_cgroup_id()
     __s32 syscall_id;      // ctx->id 来自 raw_tp/sys_enter
+    __s32 ret;             // 返回值（sys_exit），enter 时为 0
     char comm[16];         // bpf_get_current_comm() — 进程名
 };
 ```
-- **总大小：36 字节** — 必须与 Python `struct.Struct('Q2Ii16s')` 匹配
+- **总大小：40 字节** — 必须与 Python `struct.Struct('Q2I2i16s')` 匹配
 - **Packed** 因为 BPF 目标与 x86_64 对 struct 对齐规则可能不一致
 
 ### Python 结构体解包
 ```python
-EVENT_FORMAT = struct.Struct("Q2Ii16s")
-# Q=u64, I=u32, I=u32, i=s32, 16s=char[16]
-# 大小：8+4+4+4+16 = 36 字节
+EVENT_FORMAT = struct.Struct("Q2I2i16s")
+# Q=u64, I=u32, I=u32, i=s32, i=s32, 16s=char[16]
+# 大小：8+4+4+4+4+16 = 40 字节
 ```
 
 ## 构建系统
@@ -85,3 +95,5 @@ echo 密码 | sudo -S .venv/bin/python3 -m src.main
 2. **sudo 密码**：bash 工具不能运行交互式 sudo。使用 `echo 密码 | sudo -S`。
 3. **自捕获**：加载器会捕获自身的系统调用（write、mmap 等），产生噪音。生产环境需要过滤加载器自身的 PID。
 4. **Ring buffer 大小**：当前 256KB。高系统调用负载下可能需要调整。
+5. **采样率**：默认全部采样。传递 `--rate N` 给 loader 可每 N 个事件采样 1 个。
+6. **PID 过滤**：loader 默认自动过滤自身 PID（`getpid()` 写入 `filter_pid` map）。可用 `--pid PID` 指定过滤目标。

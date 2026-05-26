@@ -27,20 +27,24 @@ sudo apt-get install -y -qq \
     pkg-config \
     git
 
-# ----- Build libbpf from source (system version is too old) -----
-echo "[2/5] Building libbpf from source..."
-if [ ! -d /tmp/libbpf ]; then
-    git clone --depth 1 --branch v1.4.7 https://github.com/libbpf/libbpf.git /tmp/libbpf
-fi
-make -C /tmp/libbpf/src -j$(nproc)
-sudo make -C /tmp/libbpf/src install
-sudo ldconfig
-
-# Verify libbpf 1.x is now available
+# ----- Check libbpf -----
+echo "[2/5] Checking libbpf..."
 if pkg-config --atleast-version=1.0 libbpf 2>/dev/null; then
     echo "  libbpf: OK ($(pkg-config --modversion libbpf))"
 else
-    echo "  WARNING: libbpf version check failed"
+    echo "  Installing libbpf-dev from apt..."
+    sudo apt-get install -y -qq libbpf-dev
+    if pkg-config --atleast-version=1.0 libbpf 2>/dev/null; then
+        echo "  libbpf: OK ($(pkg-config --modversion libbpf))"
+    else
+        echo "  Building libbpf from source..."
+        if [ ! -d /tmp/libbpf ]; then
+            git clone --depth 1 --branch v1.4.7 https://github.com/libbpf/libbpf.git /tmp/libbpf
+        fi
+        make -C /tmp/libbpf/src -j$(nproc)
+        sudo make -C /tmp/libbpf/src install
+        sudo ldconfig
+    fi
 fi
 
 # ----- Python virtual environment -----
